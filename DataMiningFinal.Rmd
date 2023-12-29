@@ -1,0 +1,543 @@
+---
+title: "BIF524 - Data Mining"
+author: "Jane Dagher"
+date: "2023-11-11"
+output:
+  html_document:
+    theme: sandstone
+    toc: true
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+
+![](cars.png) 
+
+```{r setup, include=FALSE}
+
+library(ggplot2)
+library(gridExtra)
+library(caret)
+library(glmnet)
+library(MASS)
+library(corrplot)
+library(nnet)
+library(boot)
+library(dplyr)
+library(pROC)
+library(class)
+
+```
+
+> # **Classification and Resampling Methods**
+
+*In this project, we aim to develop machine learning models to predict the acceptability of a car based on multiple features. The dataset includes various attributes of cars such as the buying price (V1), maintenance price (V2), number of doors (V3), capacity in terms of persons to carry (V4), size of the luggage boot (V5), and estimated safety of the car (V6). Our target variable is the acceptability of the car (Response), categorized as either 'bad' or 'good'.*
+
+```{r }
+# Read the dataset
+my_data <- read.csv("DataAssign2.csv")
+
+
+# Check for missing values
+
+missing_values <- sapply(my_data, function(x) sum(is.na(x)))
+print("Missing values in each column:")
+print(missing_values)
+
+# With no missing values in our dataset, we can proceed confidently to the next steps of the data     
+#analysis
+
+```
+
+
+
+# **Initial Graphical Exploration**
+
+
+In order to determine which feature is significant and which is not, we visually examined the data in this section by showing the count of acceptability instances (count of good and bad) for each value of each predictor. This will subsequently be contrasted with the outcomes of the machine learning models, which will either validate or refute our conclusion in this section.
+
+
+#### **Stacked Bar Plots**
+
+*Stacked bar charts are chosen to explore the data because they effectively illustrate the relationship between categorical features and car acceptability, allowing for easy comparison of how different feature values influence the acceptability outcome. This approach helps identify the most predictive features for car acceptability. *
+
+
+```{r }
+#We were getting an additional column that is not of use
+
+#Remove rows where the response variable is an empty string
+my_data <- my_data[my_data[[names(my_data)[7]]] != "", ]
+unique_values <- unique(my_data[[names(my_data)[7]]])
+
+# Descriptive feature names corresponding to the dataset columns
+descriptive_feature_names <- c("Buying Price", "Maintenance Price", "Number of Doors", 
+                               "Capacity ", "Luggage Boot Size", "Estimated Safety")
+
+# Define the response variable's descriptive name
+response_name <- "Acceptability of the Car"
+my_colors <- c("yellow", "yellowgreen" , "darkcyan", "blue4")
+
+# Edit existing function to change the title
+plot_feature_response <- function(df, feature, response) {
+  # Create a contingency table to analyze the relationship between the feature and response
+  ct <- table(df[[feature]], df[[response]])
+  
+  # Create a barplot with proportions, using distinct colors for each category
+  barplot(prop.table(ct, 1), beside = FALSE, col = my_colors , 
+          legend = rownames(ct), xlab = feature, ylab = "Proportion")
+  
+  # Fetch the descriptive name for the feature using the index in your dataset
+  feature_index <- which(names(df) == feature)
+  descriptive_feature_name <- descriptive_feature_names[feature_index]
+  
+  # Setting the title using descriptive names
+  title(main = paste("Association between", descriptive_feature_name, "and", response_name))
+}
+
+```
+
+
+```{r}
+
+plot_feature_response(my_data, "V1", "V7") 
+
+```
+
+*The bar chart indicates that buying price (V1) is likely a useful feature for predicting car acceptability (V7). Cars with 'low' and 'med' buying prices are more frequently labeled as 'good', while 'high' and 'vhigh' prices are less common in the 'good' category. This suggests a trend where lower buying prices may lead to higher acceptability.*
+
+```{r}
+
+plot_feature_response(my_data, "V2", "V7") 
+
+```
+
+*The maintenance price (V2) is another useful predictor for car acceptability (V7). "Good" acceptability is more common in cars with "low" and "med" maintenance prices, indicating a trend where lower maintenance costs may lead to higher acceptability.*
+
+```{r}
+
+plot_feature_response(my_data, "V3", "V7") 
+
+```
+
+*The number of doors (V3) shows a similar distribution for both "good" and "bad" car acceptability (V7), suggesting it may be a less significant predictor of acceptability compared to price-related features.*
+
+```{r}
+
+plot_feature_response(my_data, "V4", "V7") 
+
+```
+
+*Car capacity (V4) appears to be a relevant predictor for acceptability (V7), with cars that can carry "more" persons more often deemed "good".*
+
+```{r}
+
+plot_feature_response(my_data, "V5", "V7") 
+
+```
+
+*The luggage boot size (V5) shows an influence on car acceptability (V7), with "bad" acceptability more common in cars with small boots and a "good" acceptability in cars with bigger boots.*
+
+```{r}
+
+plot_feature_response(my_data, "V6", "V7") 
+
+```
+
+*Based on the bar chart, safety (V6) may be an informative feature when estimating a car's acceptability (V7). Cars classified as "bad" are more likely to have "low" safety, whereas "good" cars are more likely to have "high" safety.*
+
+
+#### **Conclusion**
+
+In conclusion, our analysis highlights the significance of several variables in determining car acceptability, including V1 (buying price), V2 (maintenance price), V4 (passenger capacity), V5 (luggage boot size), and V6 (safety). These variables exhibit strong correlations with car acceptability, providing valuable insights. Conversely, variable V3 (number of doors) appears less influential, with no substantial correlation observed with car acceptability. This suggests that certain features play a more crucial role in determining a car's appeal, while others, like the number of doors, have a minimal impact.
+
+However, to further enhance our understanding and predictive capabilities, we will employ machine learning models that will allow us to delve deeper into the relationships between variables and car acceptability, providing more accurate insights.
+
+
+
+```{r}
+
+# Define the columns that need ordinal encoding
+columns_to_encode <- c("V1", "V2", "V3", "V4", "V5", "V6")
+
+# Define specific order for columns
+levels_V1 <- c("low", "med", "high", "vhigh") 
+levels_V2 <- c("low", "med", "high", "vhigh")
+levels_V3 <- c("2", "3", "4", "5more")
+levels_V4 <- c("2", "4", "more")
+levels_V5 <- c("small", "med", "big")
+levels_V6 <- c("low", "med", "high")
+
+# Perform ordinal encoding for the specified columns
+encoded_data <- my_data
+for (col in columns_to_encode) {
+  if (col == "V1") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V1))
+  } else if (col == "V2") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V2))
+  } else if (col == "V3") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V3))
+  } else if (col == "V4") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V4))
+  } else if (col == "V5") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V5))
+  } else if (col == "V6") {
+    encoded_data[[col]] <- as.integer(factor(encoded_data[[col]], levels = levels_V6))
+  }
+}
+
+# Check unique values of V7 in original data
+unique_values_V7 <- unique(my_data$V7)
+print("Unique values in V7:")
+print(unique_values_V7)
+
+# Display the first few rows of the encoded dataset
+head(encoded_data)
+
+
+```
+```{r}
+# We did a correlation matrix in order to know what features are of utmost importance to include in our model
+
+# Select only numeric columns for the correlation matrix
+numeric_data <- encoded_data[sapply(encoded_data, is.numeric)]
+
+# Compute the correlation matrix
+correlation_matrix <- cor(numeric_data)
+
+print(correlation_matrix)
+
+# Visualize the correlation matrix
+corrplot(correlation_matrix, method = "circle")
+
+```
+
+*In the given correlation matrix, V1 (buying price) and V6 (safety) show a strong correlation, suggesting that perceptions of safety tend to increase with the buying price of the car.*
+
+Seeing as it is, we decided to remove V3 and V6. V3 was removed because it showed little to no predictive power to the acceptability of the car, where as V6 is strongly correlated to V1, suggesting that keeping both is redundant and it is better to remove one of them.
+
+
+# **Data Splitting Using the Validation Set Approach**
+
+
+In this section, we will partition the dataset into a training set and a test set using the validation set approach, ensuring reproducibility by setting a random seed for the analysis.
+
+```{r}
+
+# Set a random seed for reproducibility
+set.seed(1)
+
+# Split the data into training and test sets using caret's createDataPartition
+train_index <- createDataPartition(encoded_data$V7, p = 0.75, list = FALSE)
+#After experimenting with various splitting ratios, including 80-20, 70-30, 75-25, 60-40, and 65-35, we observed that anything above 75-25 resulted in overfitting due to our small dataset, yielding excessively high accuracy (>99%), and 60-40 was too limited, ultimately identifying 75-25 as the most optimal split.
+
+train_data <- encoded_data[train_index, ]
+test_data <- encoded_data[-train_index, ]
+
+# Ensuring V7 is a factor in both train and test sets
+train_data$V7 <- as.factor(train_data$V7)
+test_data$V7 <- as.factor(test_data$V7)
+
+# Print the dimensions of the training and test sets
+cat("Training set dimensions:", dim(train_data), "\n")
+cat("Test set dimensions:", dim(test_data), "\n")
+
+```
+
+
+```{r}
+
+colnames(train_data)
+
+```
+
+*The choice of a split ratio of 0.75 (75%) in this context aims to allocate a sufficiently large portion of the data for model training while retaining an adequate test set for evaluating model performance.*
+
+# **Logistic Regression Analysis and Model Evaluation**
+
+In this section, logistic regression is applied to the training data to predict the response variable using the most relevant predictor variables, followed by an assessment of the model's test error, identification of statistically significant predictors, computation of the confusion matrix, and interpretation of the types of errors made by the logistic regression model.
+
+*We excluded V3 and V6 from the model due to its lack of significance and to avoid redundancy.*
+
+```{r}
+# Train a Logistic Regression Model
+logistic_model <- glm(V7 ~ V1 + V2 + V4 + V5, data = train_data, family = binomial())
+
+# Summarize the model to view the significance of predictors
+summary(logistic_model)
+```
+*Based on the results, the p-values indicate that variables V1 (buying price), V2(maintenance price) and V5 (luggage boot size) are statistically significant predictors of car acceptability, while the other variable V4 (passenger capacity), shows a slightly less significant associations.*
+
+
+```{r}
+coef(logistic_model)
+```
+
+```{r}
+
+# Predict on Test Data
+predictions <- predict(logistic_model, newdata = test_data, type = "response")
+predicted_classes <- ifelse(predictions > 0.5, "good", "bad")
+
+# Compute the Confusion Matrix
+confusion_matrix <- table(Predicted = predicted_classes, Actual = test_data$V7)
+
+# Calculate Overall Accuracy
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+
+# Calculate Test Error
+log_test_error <- 1 - accuracy
+
+print("Logistic Regression Confusion Matrix:")
+print(confusion_matrix)
+print(paste("Accuracy:", accuracy))
+print(paste("Test Error:", log_test_error))
+```
+#### **Conclusion**
+
+The logistic regression model exhibits high accuracy (84.37%) with a test error (15.62%), indicating effective predictive capabilities. The confusion matrix reveals a balanced performance, with only 3 false positives and 7 false negatives, suggesting the model slightly errs more in misclassifying 'good' cars as 'bad'. The low number of both false positives and false negatives indicates that the model is making well-balanced predictions.
+Overall, the logistic regression model shows a strong ability to distinguish between 'good' and 'bad' car acceptability. 
+
+
+# **Analyzing Performance: LDA, and QDA**
+
+#### **LDA**
+
+```{r}
+# Train LDA model
+lda_model <- lda(V7 ~ V1 + V2 + V4 + V5, data = train_data)
+lda_model
+plot(lda_model)
+
+```
+
+```{r}
+# Predict on Test Data
+lda_predictions <- predict(lda_model, newdata = test_data)
+lda_predicted_classes <- lda_predictions$class
+
+# Create a data frame of the original data and the LDA predictions
+lda_data <- cbind(train_data, Predicted = predict(lda_model)$class)
+
+# Compute the Confusion Matrix
+lda_confusion_matrix <- table(Predicted = lda_predicted_classes, Actual = test_data$V7)
+
+# Calculate Overall Accuracy
+lda_accuracy <- sum(diag(lda_confusion_matrix)) / sum(lda_confusion_matrix)
+
+# Calculate Test Error
+lda_test_error <- 1 - lda_accuracy
+
+print('LDA Confusion Matrix:')
+print(lda_confusion_matrix)
+print(paste("LDA Accuracy:", lda_accuracy))
+print(paste("LDA Test Error:", lda_test_error))
+```
+*From the confusion matrix and accuracy metrics, we can deduce that the LDA model is highly accurate in classifying the test data, with 1 false negative and 6 false positives.*
+
+
+#### **QDA**
+
+```{r}
+# Train QDA model
+qda_model <- qda(V7 ~ V1 + V2 + V4 + V5, data = train_data)
+
+qda_model
+
+```
+
+```{r}
+# Predict on Test Data
+qda_predictions <- predict(qda_model, newdata = test_data)
+qda_predicted_classes <- qda_predictions$class
+
+# Compute the Confusion Matrix
+qda_confusion_matrix <- table(Predicted = qda_predicted_classes, Actual = test_data$V7)
+
+# Calculate Overall Accuracy
+qda_accuracy <- sum(diag(qda_confusion_matrix)) / sum(qda_confusion_matrix)
+
+# Calculate Test Error
+qda_test_error <- 1 - qda_accuracy
+
+print('QDA Confusion Matrix:')
+print(qda_confusion_matrix)
+print(paste("QDA Accuracy:", qda_accuracy))
+print(paste("QDA Test Error:", qda_test_error))
+```
+
+*The QDA model shows a high level of accuracy, identical to the LDA model, with a very small test error*
+
+```{r}
+
+test_data <- test_data %>%
+  mutate(
+    logit_prob = predict(logistic_model, newdata = ., type = "response"),
+    lda_prob = predict(lda_model, newdata = .)$posterior[, "good"],
+    qda_prob = predict(qda_model, newdata = .)$posterior[, "good"]
+  )
+
+# Compute ROC curves
+roc_logit <- roc(response = test_data$V7, predictor = test_data$logit_prob)
+roc_lda <- roc(response = test_data$V7, predictor = test_data$lda_prob)
+roc_qda <- roc(response = test_data$V7, predictor = test_data$qda_prob)
+
+# Calculate AUC values
+auc_logit <- auc(roc_logit)
+auc_lda <- auc(roc_lda)
+auc_qda <- auc(roc_qda)
+
+# Plot ROC curves
+plot(roc_logit, col = "blue", main = "ROC Curves", xlim = c(1, 0), ylim = c(0, 1))
+lines(roc_lda, col = "red")
+lines(roc_qda, col = "green")
+abline(a = 0, b = 1, lty = 2, col = "gray") # diagonal line for reference
+
+legend("bottomright", legend = c("Logistic Regression", "LDA", "QDA"),
+       col = c("blue", "red", "green"), lwd = 2)
+
+# Print AUC values
+print(paste("AUC for Logistic Regression:", auc_logit))
+print(paste("AUC for LDA:", auc_lda))
+print(paste("AUC for QDA:", auc_qda))
+
+```
+
+#### **Conclusion**
+
+The AUC (Area Under the ROC Curve) values provide a measure of how well different classification models can distinguish between 'bad' and 'good' car acceptability based on the dataset's chosen features. Logistic Regression achieves an AUC of 0.9248, indicating its ability to make accurate predictions. LDA (Linear Discriminant Analysis) performs slightly better with an AUC of 0.9277. However, the highest performance is achieved by QDA (Quadratic Discriminant Analysis) with an AUC of 0.9326, suggesting its superior ability to capture non-linear relationships between features and car acceptability. In summary, all models display good discriminatory power, with QDA having the strongest performance..
+
+
+# **K-Nearest Neighbors (KNN) Analysis**
+
+*In this section, we will use the K-Nearest Neighbors (KNN) algorithm with various K values to predict a response variable based on the most relevant input features, assess the test errors, and compare the performance of different K values.*
+
+
+```{r}
+
+# Scale only the predictor variables
+train_data_scaled <- scale(train_data[, c("V1", "V2", "V4" , "V5")])
+test_data_scaled <- scale(test_data[, c("V1", "V2", "V4", "V5")])
+
+# Response variable
+train_response <- train_data$V7
+test_response <- test_data$V7
+# Set a range for K
+k_values <- 1:20
+misclass_rates <- numeric(length(k_values))
+
+# Loop over K values
+for (k in k_values) {
+  set.seed(123)  # For reproducibility
+  predicted_classes <- knn(train = train_data_scaled, test = test_data_scaled, 
+                           cl = train_response, k = k)
+  
+  # Misclassification rate
+  misclass_rates[k] <- mean(predicted_classes != test_response)
+}
+
+# Create a data frame for plotting
+results_df <- data.frame(K = k_values, MisclassificationRate = misclass_rates)
+
+```
+
+```{r}
+ggplot(results_df, aes(x = K, y = MisclassificationRate)) +
+  geom_line() +
+  geom_point(shape = 1) +
+  labs(title = "KNN Misclassification Rate by K",
+       x = "Number of Neighbors (K)",
+       y = "Misclassification Rate") +
+  theme_minimal()
+
+```
+*It appears from the graph that there's a low point around K=7. After this point, the misclassification rate increases slightly and then stabilizes after around K=16. *
+
+```{r}
+best_k <- results_df[which.min(results_df$MisclassificationRate), "K"]
+cat("Best K Value:", best_k, "\n")
+
+```
+```{r}
+# Set the chosen k value
+chosen_k <- 7
+
+# Train the KNN model with the chosen k value
+set.seed(123)
+knn_model <- knn(train = train_data_scaled, test = test_data_scaled, cl = train_response, k = chosen_k)
+
+# Calculate test error (misclassification rate)
+test_error_knn <- mean(knn_model != test_response)
+
+# Print the test error
+cat("Test Error for k =", chosen_k, ":", test_error_knn, "\n")
+
+```
+
+# **5-Fold Cross-Validation**
+```{r}
+
+# Define control method for 5-fold cross-validation
+train_control <- trainControl(method = "cv", number = 5)
+
+# Train QDA model with 5-fold cross-validation
+set.seed(123)
+cv_qda_model <- train(V7 ~ V1 + V2 + V4 + V5, data = train_data, method = "qda", trControl = train_control)
+
+# Retrieve cross-validated test error
+cv_qda_test_error <- 1 - cv_qda_model$results$Accuracy
+
+print(cv_qda_model)
+print(paste("Cross-Validated QDA Test Error:", cv_qda_test_error))
+
+print('---------------------------------------------------------------------------------------------------------')
+# Make predictions on the separate test data
+test_predictions <- predict(cv_qda_model, newdata = test_data)
+
+# Calculate test error
+test_error_cv <- mean(test_predictions != test_data$V7)
+
+# Print the test error
+print(paste("Test Error on Test Data:", test_error_cv))
+
+
+```
+
+# **Bootstrap**
+
+```{r}
+
+# Define the bootstrap statistic function
+boot_statistic <- function(data, indices) {
+  # Subset the data
+  boot_data <- data[indices, ]  # Resample with replacement
+  # Fit QDA model on the bootstrapped data
+  qda_boot <- qda(V7 ~ V1 + V2 + V4 + V5, data = boot_data)
+  # Predict on the original test data (not resampled)
+  qda_boot_predictions <- predict(qda_boot, newdata = test_data)$class
+  # Compute the accuracy for each bootstrap sample
+  qda_boot_accuracy <- mean(qda_boot_predictions == test_data$V7)
+  return(qda_boot_accuracy)
+}
+
+```
+
+```{r}
+# Set up the number of bootstrap replicates
+n_bootstraps <- 100
+
+# Run the bootstrapping 
+set.seed(123)  
+boot_results <- boot(data = train_data, statistic = boot_statistic, R = n_bootstraps)
+
+boot_results
+
+```
+```{r}
+# Standard errors of the bootstrapped accuracies
+qda_se <- sd(boot_results$t)
+print(paste("Estimated Standard Error of QDA Accuracy:", qda_se))
+
+```
+#### **Conclusion**
+
+The 5-fold cross-validation test error of 0.109 suggests that the Quadratic Discriminant Analysis (QDA) model performs well, with a relatively low error rate when evaluated across different subsets of the data. The estimated standard error of QDA accuracy from bootstrapping, at 0.0162, indicates the model's accuracy is consistent across multiple resampled datasets. On the other hand, the validation set approach, typically reflected in the first calculation, tends to have a higher variance in the error estimate since it relies on a single partition of the data. The lower variance in the bootstrapping method shows more confidence in the model's performance estimate.
